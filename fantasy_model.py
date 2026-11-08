@@ -53,10 +53,28 @@ def add_fantasy_points(logs):
     )
     return logs
 
+def add_features(logs):
+    logs["GAME_DATE"] = pd.to_datetime(logs["GAME_DATE"])
+    logs = logs.sort_values(["PLAYER_ID", "GAME_DATE"]).reset_index(drop=True)
+    g = logs.groupby("PLAYER_ID")
+
+    # Rolling averages of past games only (shift(1) keeps the current game out)
+    for stat in ["FANTASY_PTS", "MIN", "PTS", "REB", "AST", "FGA", "TOV"]:
+        logs[f"{stat}_avg5"] = g[stat].transform(lambda s: s.shift(1).rolling(5).mean())
+        logs[f"{stat}_avg15"] = g[stat].transform(lambda s: s.shift(1).rolling(15).mean())
+
+    # Home or away (away games have "@" in the matchup text)
+    logs["IS_HOME"] = (~logs["MATCHUP"].str.contains("@")).astype(int)
+
+    # Days of rest since the player's last game
+    logs["REST_DAYS"] = g["GAME_DATE"].diff().dt.days.clip(upper=7)
+
+    return logs
 
 if __name__ == "__main__":
     logs = load_logs()
     logs = add_fantasy_points(logs)
+    logs = add_features(logs)
 
     print(logs.shape)
     print(logs[["PLAYER_NAME", "GAME_DATE", "FANTASY_PTS"]].head())
