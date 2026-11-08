@@ -5,6 +5,7 @@ from nba_api.stats.endpoints import playergamelogs
 
 CSV_PATH = "game_logs.csv"
 SEASONS = ["2022-23", "2023-24", "2024-25", "2025-26"]
+SEASON_TYPES = ["Regular Season", "Playoffs"]
 
 
 def load_logs():
@@ -14,11 +15,16 @@ def load_logs():
 
     all_logs = []
     for season in SEASONS:
-        print(f"Pulling {season}...")
-        df = playergamelogs.PlayerGameLogs(season_nullable=season).get_data_frames()[0]
-        df["SEASON"] = season
-        all_logs.append(df)
-        time.sleep(2)  # avoid rate limits
+        for season_type in SEASON_TYPES:
+            print(f"Pulling {season} {season_type}...")
+            df = playergamelogs.PlayerGameLogs(
+                season_nullable=season,
+                season_type_nullable=season_type,
+            ).get_data_frames()[0]
+            df["SEASON"] = season
+            df["SEASON_TYPE"] = season_type
+            all_logs.append(df)
+            time.sleep(2)  # avoid rate limits
 
     logs = pd.concat(all_logs, ignore_index=True)
     logs.to_csv(CSV_PATH, index=False)
@@ -53,6 +59,7 @@ def add_fantasy_points(logs):
     )
     return logs
 
+
 def add_features(logs):
     logs["GAME_DATE"] = pd.to_datetime(logs["GAME_DATE"])
     logs = logs.sort_values(["PLAYER_ID", "GAME_DATE"]).reset_index(drop=True)
@@ -69,12 +76,34 @@ def add_features(logs):
     # Days of rest since the player's last game
     logs["REST_DAYS"] = g["GAME_DATE"].diff().dt.days.clip(upper=7)
 
+    # Playoff flag
+    logs["IS_PLAYOFFS"] = (logs["SEASON_TYPE"] == "Playoffs").astype(int)
+
     return logs
+
 
 if __name__ == "__main__":
     logs = load_logs()
+    print(logs["SEASON_TYPE"].value_counts())
+
     logs = add_fantasy_points(logs)
     logs = add_features(logs)
 
-    print(logs.shape)
-    print(logs[["PLAYER_NAME", "GAME_DATE", "FANTASY_PTS"]].head())
+    feature_cols = [c for c in logs.columns if c.endswith(("_avg5", "_avg15"))] + [
+        "IS_HOME", "REST_DAYS", "IS_PLAYOFFS"
+    ]
+
+    print("Before:", logs.shape)
+    data = logs.dropna(subset=feature_cols)
+    print("After:", data.shape)
+
+    # Train on the first three seasons, test on 2025-26 (regular season + playoffs)
+    train = data[data["GAME_DATE"] < "2025-09-01"]
+    test = data[data["GAME_DATE"] >= "2025-09-01"]
+
+    X_train, y_train = train[feature_cols], train["FANTASY_PTS"]
+    X_test, y_test = test[feature_cols], test["FANTASY_PTS"]
+
+    print("Train:", train.shape, "Test:", test.shape)
+    print("Latest train game:", train["GAME_DATE"].max())
+    print("Earliest test game:", test["GAME_DATE"].min())
